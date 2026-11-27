@@ -93,6 +93,9 @@ tr.cur td{background:var(--red-soft)}
 .state{font-size:13px;padding:2px 8px;border:1px solid var(--line)}
 .state.in{background:var(--red);border-color:var(--red);color:#fff}
 .feed{display:grid;gap:12px}
+.linkbtn{display:inline-block;margin-top:14px;border:0;background:none;padding:6px 0;color:var(--red);font:inherit;font-size:14px;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.delbox{margin-top:14px;border:1.5px solid var(--red);background:var(--red-soft);padding:12px 14px;display:grid;gap:2px}
+.pick small{font-size:12px}
 .pens{display:flex;flex-wrap:wrap;gap:8px}
 .pen-b{display:flex;align-items:center;gap:8px;border:1.5px solid var(--hair);background:var(--card);color:var(--ink);padding:6px 12px 6px 8px;min-height:40px;font:inherit;font-size:14px;cursor:pointer}
 .pen-b i{width:22px;height:22px;display:block}.pen-b.on{border-color:var(--line);font-weight:700;box-shadow:3px 3px 0 var(--hair)}
@@ -161,6 +164,7 @@ const PENS={red:{name:'빨강',c:'#d6402b'},blue:{name:'파랑',c:'#2b5fd9'},gre
 const PK=Object.keys(PENS);
 const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{v==null?localStorage.removeItem(k):localStorage.setItem(k,v)}catch(e){}}};
 let sb=null,me=LS.get('study_me'),gate='loading';
+const mine=new Set();const MCOLS='id,name,color,joined,updated';
 let S={start_date:'2026-11-11',exam_date:'2027-03-06',target_hours:4,target_rate:.9};
 const members=new Map(),logs=new Map(),urls=new Map();
 const st={tab:'today',date:today(),draft:null,draftKey:'',dirty:false,setup:null,uploading:0,busy:false};
@@ -197,6 +201,7 @@ function titleBlock(){
 /* ---------- 데이터 ---------- */
 function errMsg(e){const m=String(e?.message||e||'');
   if(/anonymous/i.test(m))return 'Supabase에서 익명 로그인(Anonymous sign-ins)이 꺼져 있습니다.';
+  if(/row-level security|violates/i.test(m))return '본인 기록만 수정·삭제할 수 있습니다.';
   if(/permission denied/i.test(m))return '데이터베이스 권한이 없습니다. 설정 스크립트(study_setup.sql)를 실행했는지 확인해 주세요.';
   if(/does not exist|schema cache/i.test(m))return '스터디 테이블이 아직 없습니다. 설정 스크립트(study_setup.sql)를 먼저 실행해 주세요.';
   if(/fetch|network/i.test(m))return '서버에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.';
@@ -204,14 +209,17 @@ function errMsg(e){const m=String(e?.message||e||'');
 let signedAt=Date.now();
 async function load(){
   if(Date.now()-signedAt>20*3600e3){urls.clear();signedAt=Date.now()}
-  const [s,m,l]=await Promise.all([sb.from('study_settings').select('*').eq('id',1).maybeSingle(),
-    sb.from('study_members').select('*').order('joined'),
-    sb.from('study_logs').select('*').order('date',{ascending:false}).limit(5000)]);
-  for(const r of [s,m,l])if(r.error)throw r.error;
+  const [s,m,l,md]=await Promise.all([sb.from('study_settings').select('*').eq('id',1).maybeSingle(),
+    sb.from('study_members').select(MCOLS).order('joined'),
+    sb.from('study_logs').select('*').order('date',{ascending:false}).limit(5000),
+    sb.from('study_member_devices').select('member_id')]);
+  for(const r of [s,m,l,md])if(r.error)throw r.error;
+  mine.clear();md.data.forEach(r=>mine.add(r.member_id));
   if(s.data)S={...S,...s.data,target_hours:Number(s.data.target_hours),target_rate:Number(s.data.target_rate)};
   members.clear();m.data.forEach(r=>members.set(r.id,r));
   logs.clear();l.data.forEach(r=>{if(!logs.has(r.member_id))logs.set(r.member_id,new Map());logs.get(r.member_id).set(r.date,r)});
-  if(me&&!members.has(me)){me=null;LS.set('study_me',null)}
+  if(me&&(!members.has(me)||!mine.has(me))){me=null;LS.set('study_me',null)}
+  if(!me&&mine.size){me=[...mine].find(id=>members.has(id))||null;if(me)LS.set('study_me',me)}
   await signPhotos(l.data.flatMap(r=>r.photos||[]));
 }
 async function signPhotos(paths){
@@ -260,13 +268,20 @@ function vGate(){
   if(gate==='loading')return `<div class="card gate"><p class="muted">불러오는 중…</p></div>`;
   if(gate==='passcode')return `<div class="card gate">${GATE_SVG}<h2 style="justify-content:center;font-size:22px">스터디 출석부</h2><p class="muted">스터디원에게 받은 암호를 입력해 주세요.</p>
     <form id="joinForm" class="joinrow"><input id="code" type="password" autocomplete="current-password" placeholder="스터디 암호" aria-label="스터디 암호" required><button class="btn red">입장하기</button></form></div>`;
-  if(gate==='pick')return `<div class="card"><h2>나는 누구인가요? <span class="tag">A-000</span></h2><p class="muted">이 기기에서 기록할 스터디원을 골라 주세요. 처음이라면 새로 등록해 주세요.</p>
-    <div class="picks">${[...members.keys()].map(id=>`<button class="pick" data-act="pickme" data-uid="${esc(id)}"><span class="pen" style="background:${pen(id)}"></span>${esc(nameOf(id))}</button>`).join('')}
-    <button class="pick new" data-act="newme"><span class="pen" style="border:1.5px dashed var(--line)"></span>+ 새 스터디원</button></div></div>`;
+  if(gate==='pick')return `<div class="card"><h2>나는 누구인가요? <span class="tag">A-000</span></h2><p class="muted">내 이름을 고르고 개인 PIN을 입력하면 이 기기에서 기록할 수 있습니다. 다른 스터디원의 기록은 보기만 할 수 있습니다.</p>
+    <div class="picks">${[...members.keys()].map(id=>`<button class="pick" data-act="pickme" data-uid="${esc(id)}"><span class="pen" style="background:${pen(id)}"></span>${esc(nameOf(id))}${mine.has(id)?'<small class="muted" style="font-weight:500">이 기기에 연결됨</small>':''}</button>`).join('')}
+    <button class="pick new" data-act="newme"><span class="pen" style="border:1.5px dashed var(--line)"></span>+ 새 스터디원</button></div>
+    <div style="text-align:center;margin-top:16px"><button class="btn ghost" data-act="browse">둘러보기만 할게요</button></div></div>`;
+  if(gate==='claim'){const id=st.claim,has=st.claimHasPin;
+    return `<div class="card gate"><span class="pen" style="display:inline-block;width:40px;height:40px;background:${pen(id)};border:1.5px solid var(--line)"></span><h2 style="justify-content:center;font-size:22px;margin-top:10px">${esc(nameOf(id))}</h2>
+    <p class="muted">${has?'개인 PIN을 입력해 주세요.':'아직 PIN이 없습니다. 앞으로 쓸 숫자 PIN(4~8자리)을 정해 주세요. 본인만 알고 있어야 합니다.'}</p>
+    <form id="claimForm" class="joinrow" style="flex-direction:column;align-items:center"><input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="off" placeholder="PIN (숫자 4~8자리)" aria-label="PIN" required>
+    ${has?'':'<input id="pin2" type="password" inputmode="numeric" pattern="[0-9]{4,8}" maxlength="8" autocomplete="off" placeholder="PIN 한 번 더" aria-label="PIN 확인" required>'}
+    <div style="display:flex;gap:8px"><button type="button" class="btn ghost" data-act="backpick">뒤로</button><button class="btn red">${has?'연결하기':'PIN 정하고 연결하기'}</button></div></form></div>`}
   return `<div class="card gate"><p>${esc(gate)}</p></div>`;
 }
 function vToday(){
-  if(!me)return `<div class="card"><h2>먼저 스터디원 등록이 필요합니다</h2><p class="muted">‘설정’에서 이름과 색을 정해 주세요.</p><button class="btn red" data-act="go" data-tab="setup">등록하기</button></div>`;
+  if(!me)return `<div class="card"><h2>지금은 둘러보기 중입니다</h2><p class="muted">내 이름을 이 기기에 연결하면 출석을 기록할 수 있습니다. 아래 작업 단면과 다른 탭은 그대로 볼 수 있어요.</p><button class="btn red" data-act="backpick">내 이름 연결하기</button></div><div class="card" style="margin-top:16px"><h2>오늘의 작업 단면 <span class="tag">S-01</span></h2>${section(today())}</div>`;
   const key=st.date;
   if(st.draftKey!==key||!st.dirty){const r=log(me,key)||{};st.draft={status:r.status||'',check_in:r.check_in||'',check_out:r.check_out||'',subject:r.subject||'',task:r.task||'',note:r.note||'',photos:[...(r.photos||[])]};st.draftKey=key}
   const d=st.draft,isToday=key===today(),m=minutes(d,key),goalPct=Math.min(100,m/(S.target_hours*60)*100);
@@ -294,6 +309,8 @@ function vToday(){
     <div class="photos">${ph}</div>
     <h3>비고</h3><textarea id="note" placeholder="피드백, 컨디션 등">${esc(d.note)}</textarea>
     <p class="muted" style="margin:6px 0 0">입력하면 자동 저장됩니다.</p>
+    ${log(me,key)?(st.confirmDel===key?`<div class="delbox"><b>${esc(key)} (${wd(key)}) 기록을 지울까요?</b><span class="muted">출결·입퇴실·학습내용·사진이 모두 삭제되며 되돌릴 수 없습니다.</span><div style="display:flex;gap:8px;margin-top:8px"><button class="btn ghost sm" data-act="delcancel">취소</button><button class="btn red sm" data-act="delok">삭제</button></div></div>`
+      :`<button class="linkbtn" data-act="delask">이 날짜 기록 삭제</button>`):''}
     </div></div>
   </div>`;
 }
@@ -311,6 +328,7 @@ function vTeam(){
   all.sort((a,b)=>a.d<b.d?1:a.d>b.d?-1:String(b.r.updated||'').localeCompare(String(a.r.updated||'')));
   const feed=all.slice(0,40).map(({u,d,r})=>`<div class="card"><div class="head" style="margin:0"><span class="who"><span class="pen" style="background:${pen(u)}"></span>${esc(nameOf(u))}</span><span class="muted num">${esc(d)} (${wd(d)})</span></div>
     <div class="chips" style="margin-top:8px">${r.status?`<span class="state">${esc(r.status)}</span>`:''}${r.check_in?`<span class="state num">${esc(r.check_in)}–${esc(r.check_out||'…')} · ${fmtH(minutes(r,d))}h</span>`:''}${r.subject?`<span class="state">${esc(r.subject)}</span>`:''}</div>
+    ${u===me?`<button class="linkbtn" style="margin-top:8px" data-act="editday" data-d="${esc(d)}">이 기록 고치기·삭제</button>`:''}
     ${r.task?`<p style="margin:10px 0 0;font-weight:600">${esc(r.task)}</p>`:''}${r.note?`<p style="margin:6px 0 0">${esc(r.note)}</p>`:''}
     ${(r.photos||[]).length?`<div class="photos">${r.photos.map(p=>`<figure>${photoSrc(p)?`<img loading="lazy" src="${esc(photoSrc(p))}" alt="${esc(nameOf(u))}의 작도 사진">`:''}</figure>`).join('')}</div>`:''}</div>`).join('');
   return `<div class="grid">${cards}</div><h2 style="margin:28px 0 12px;font-size:18px">학습 기록 피드</h2><div class="feed">${feed||'<p class="muted">아직 기록이 없습니다.</p>'}</div>`;
@@ -337,6 +355,7 @@ function vSetup(){
   if(!st.setup){const m=(me&&members.get(me))||{};st.setup={name:m.name||'',color:me?penKey(me):PK[members.size%PK.length],start:S.start_date,exam:S.exam_date,th:S.target_hours,tr:Math.round(S.target_rate*100)}}
   const s=st.setup;
   return `<div class="cols"><div class="card"><h2>${me?'내 정보':'스터디원 등록'} <span class="tag">A-901</span></h2>
+    ${me?'':`<h3>개인 PIN (숫자 4~8자리)</h3><div style="display:flex;gap:8px;flex-wrap:wrap"><input id="npin" type="password" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="PIN" value="${esc(s.pin||'')}"><input id="npin2" type="password" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="PIN 한 번 더" value="${esc(s.pin2||'')}"></div><p class="muted" style="margin:6px 0 0">다른 기기에서 내 이름을 연결할 때 필요합니다. 본인만 알고 있어 주세요.</p>`}
     <h3>이름</h3><input id="sname" value="${esc(s.name)}" placeholder="예: 최상훈" maxlength="20" style="width:100%">
     <h3>내 색연필</h3><div class="pens" role="radiogroup" aria-label="색">${PK.map(k=>`<button class="pen-b ${s.color===k?'on':''}" role="radio" aria-checked="${s.color===k}" data-act="pen" data-c="${k}"><i style="background:repeating-linear-gradient(45deg,${PENS[k].c} 0 2px,transparent 2px 5px);border:1.5px solid ${PENS[k].c}"></i>${PENS[k].name}</button>`).join('')}</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:20px"><button class="btn red" data-act="saveme">저장하기</button>${me?'<button class="btn ghost" data-act="switchme">다른 스터디원으로 바꾸기</button>':(members.size?'<button class="btn ghost" data-act="backpick">기존 스터디원 고르기</button>':'')}</div></div>
@@ -357,7 +376,17 @@ function paint(){
 
 /* ---------- 이벤트 ---------- */
 document.querySelector('nav').addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;st.tab=b.dataset.tab;if(st.tab==='setup')st.setup=null;paint()});
-$('#view').addEventListener('submit',async e=>{e.preventDefault();if(e.target.id!=='joinForm')return;
+$('#view').addEventListener('submit',async e=>{e.preventDefault();
+  if(e.target.id==='claimForm'){const pin=$('#pin').value,p2=$('#pin2');
+    if(!/^[0-9]{4,8}$/.test(pin)){toast('PIN은 숫자 4~8자리입니다.');return}
+    if(p2&&p2.value!==pin){toast('PIN 두 칸이 서로 다릅니다.');return}
+    const btn=e.target.querySelector('button.red');btn.disabled=true;
+    const {data,error}=await sb.rpc('study_claim_member',{m:st.claim,pin});btn.disabled=false;
+    if(error){toast(errMsg(error));return}
+    if(data==='wrong'){toast('PIN이 맞지 않습니다.');return}
+    if(data!=='ok'){toast('연결하지 못했습니다. 다시 시도해 주세요.');return}
+    mine.add(st.claim);me=st.claim;LS.set('study_me',me);gate='app';st.tab='today';st.dirty=false;st.draftKey='';toast('이 기기에 내 이름을 연결했습니다.');paint();return}
+  if(e.target.id!=='joinForm')return;
   const btn=e.target.querySelector('button');btn.disabled=true;
   const {data,error}=await sb.rpc('study_join',{code:$('#code').value});
   if(error){btn.disabled=false;toast(errMsg(error));return}
@@ -366,19 +395,36 @@ $('#view').addEventListener('submit',async e=>{e.preventDefault();if(e.target.id
 $('#view').addEventListener('click',async e=>{
   const b=e.target.closest('[data-act]');if(!b)return;const a=b.dataset.act,d=st.draft,s=st.setup;
   if(a==='go'){st.tab=b.dataset.tab;st.setup=null;paint()}
-  if(a==='pickme'){me=b.dataset.uid;LS.set('study_me',me);gate='app';st.tab='today';st.dirty=false;st.draftKey='';paint()}
-  if(a==='newme'){me=null;LS.set('study_me',null);gate='app';st.tab='setup';st.setup=null;paint()}
-  if(a==='switchme'||a==='backpick'){me=null;LS.set('study_me',null);gate='pick';paint()}
+  if(a==='pickme'){const id=b.dataset.uid;
+    if(mine.has(id)){me=id;LS.set('study_me',me);gate='app';st.tab='today';st.dirty=false;st.draftKey='';paint();return}
+    const {data,error}=await sb.rpc('study_member_has_pin',{m:id});if(error){toast(errMsg(error));return}
+    st.claim=id;st.claimHasPin=!!data;gate='claim';paint();setTimeout(()=>$('#pin')?.focus(),50)}
+  if(a==='newme'){me=null;gate='app';st.tab='setup';st.setup=null;paint()}
+  if(a==='browse'){me=null;gate='app';st.tab='today';paint()}
+  if(a==='switchme'||a==='backpick'){gate='pick';paint()}
+  if(a==='delask'){st.confirmDel=st.date;paint()}
+  if(a==='delcancel'){st.confirmDel=null;paint()}
+  if(a==='editday'){st.date=b.dataset.d;st.dirty=false;st.tab='today';paint();scrollTo({top:0,behavior:'smooth'})}
+  if(a==='delok'){const key=st.date,r=log(me,key);b.disabled=true;clearTimeout(saveTimer);
+    await chain;const {error}=await sb.from('study_logs').delete().eq('member_id',me).eq('date',key);
+    if(error){b.disabled=false;toast('삭제하지 못했습니다: '+errMsg(error));return}
+    const ph=(r&&r.photos)||[];if(ph.length)sb.storage.from(BUCKET).remove(ph);
+    logs.get(me)?.delete(key);st.confirmDel=null;st.dirty=false;st.draftKey='';toast(`${key} 기록을 삭제했습니다.`);paint()}
   if(a==='status'){d.status=d.status===b.dataset.s?'':b.dataset.s;st.dirty=true;saveDraft(true);paint()}
   if(a==='subj'){d.subject=d.subject===b.dataset.s?'':b.dataset.s;st.dirty=true;saveDraft(true);paint()}
   if(a==='now'){const f=b.dataset.f;d[f]=hhmm(new Date());if(f==='check_in'&&!d.status)d.status='출석';st.dirty=true;saveDraft(true);paint();toast(f==='check_in'?'입실 기록했습니다.':'퇴실 기록했습니다. 수고하셨어요!')}
   if(a==='pick')$('#file').click();
   if(a==='rmphoto'){const p=b.dataset.id;d.photos=d.photos.filter(x=>x!==p);st.dirty=true;saveDraft(true);paint();sb.storage.from(BUCKET).remove([p])}
   if(a==='pen'){s.color=b.dataset.c;paint()}
-  if(a==='saveme'){const name=s.name.trim().slice(0,20);if(!name){toast('이름을 입력해 주세요.');return}b.disabled=true;
-    const q=me?sb.from('study_members').update({name,color:s.color,updated:new Date().toISOString()}).eq('id',me).select().single():sb.from('study_members').insert({name,color:s.color}).select().single();
-    const {data,error}=await q;b.disabled=false;if(error){toast('저장에 실패했습니다: '+errMsg(error));return}
-    members.set(data.id,data);if(!me){me=data.id;LS.set('study_me',me)}toast('저장했습니다.');st.setup=null;st.tab='today';paint()}
+  if(a==='saveme'){const name=s.name.trim().slice(0,20);if(!name){toast('이름을 입력해 주세요.');return}
+    if(!me){if(!/^[0-9]{4,8}$/.test(s.pin||'')){toast('PIN은 숫자 4~8자리로 정해 주세요.');return}if(s.pin!==s.pin2){toast('PIN 두 칸이 서로 다릅니다.');return}}
+    b.disabled=true;
+    if(me){const {data,error}=await sb.from('study_members').update({name,color:s.color,updated:new Date().toISOString()}).eq('id',me).select(MCOLS).single();
+      b.disabled=false;if(error){toast('저장에 실패했습니다: '+errMsg(error));return}members.set(data.id,data)}
+    else{const {data:id,error}=await sb.rpc('study_create_member',{p_name:name,p_color:s.color,pin:s.pin});
+      b.disabled=false;if(error){toast('저장에 실패했습니다: '+errMsg(error));return}
+      me=id;LS.set('study_me',me);mine.add(id);try{await load()}catch(x){}}
+    toast('저장했습니다.');st.setup=null;st.tab='today';paint()}
   if(a==='savegroup'){const row={start_date:s.start,exam_date:s.exam,target_hours:Number(s.th)||0,target_rate:Math.min(1,Math.max(0,(Number(s.tr)||0)/100)),updated:new Date().toISOString()};
     if(!row.start_date||!row.exam_date||row.exam_date<=row.start_date){toast('시험일은 시작일보다 뒤여야 합니다.');return}
     b.disabled=true;const {error}=await sb.from('study_settings').update(row).eq('id',1);b.disabled=false;
@@ -388,11 +434,12 @@ $('#view').addEventListener('input',e=>{const t=e.target,d=st.draft,s=st.setup;
   if(t.id==='task'){d.task=t.value.slice(0,100);st.dirty=true;saveDraft()}
   else if(t.id==='note'){d.note=t.value.slice(0,500);st.dirty=true;saveDraft()}
   else if(t.id==='sname')s.name=t.value;
+  else if(t.id==='npin')s.pin=t.value.replace(/\D/g,'');else if(t.id==='npin2')s.pin2=t.value.replace(/\D/g,'');
   else if(t.id==='sstart')s.start=t.value;else if(t.id==='sexam')s.exam=t.value;
   else if(t.id==='sth')s.th=t.value;else if(t.id==='str')s.tr=t.value;
 });
 $('#view').addEventListener('change',e=>{const t=e.target,d=st.draft;
-  if(t.id==='date'&&t.value){st.date=t.value;st.dirty=false;paint()}
+  if(t.id==='date'&&t.value){st.date=t.value;st.dirty=false;st.confirmDel=null;paint()}
   if(t.id==='tin'||t.id==='tout'){d[t.id==='tin'?'check_in':'check_out']=t.value||'';if(t.id==='tin'&&t.value&&!d.status)d.status='출석';st.dirty=true;saveDraft(true);paint()}
 });
 async function compress(file){const url=URL.createObjectURL(file);
@@ -412,7 +459,7 @@ $('#file').addEventListener('change',async e=>{const files=[...e.target.files];e
 /* ---------- 시작 ---------- */
 async function enter(){gate='loading';paint();
   try{await load()}catch(e){gate=errMsg(e);paint();return}
-  if(me&&members.has(me))gate='app';else if(members.size)gate='pick';else{gate='app';st.tab='setup'}
+  if(me&&members.has(me)&&mine.has(me))gate='app';else if(members.size)gate='pick';else{gate='app';st.tab='setup'}
   setStatus('');paint()}
 async function init(){
   paint();
