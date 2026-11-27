@@ -67,6 +67,11 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .btn.ghost{background:var(--card);color:var(--ink)}.btn.red{background:var(--red);border-color:var(--red);color:#fff}
 .btn.sm{padding:6px 10px;min-height:38px;font-size:14px}
 .btn:disabled{opacity:.45;cursor:default}
+.subj{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1.5px solid var(--line)}
+.sj{border:0;border-right:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;padding:8px 4px;min-height:58px;cursor:pointer;display:grid;align-content:center;justify-items:center;gap:1px;line-height:1.25}
+.sj:last-child{border-right:0}.sj b{font-size:12px;font-weight:600;color:var(--mute)}.sj span{font-size:14px;font-weight:600}
+.sj.on{background:var(--ink);color:var(--card)}.sj.on b{color:var(--card);opacity:.75}
+@media(max-width:420px){.subj{grid-template-columns:repeat(2,minmax(0,1fr))}.sj:nth-child(2){border-right:0}.sj:nth-child(-n+2){border-bottom:1px solid var(--line)}}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chip{border:1.5px solid var(--line);background:var(--card);color:var(--ink);padding:5px 12px;min-height:38px;font:inherit;font-size:14px;cursor:pointer}
 .chip.on{background:var(--ink);color:var(--card)}
@@ -159,7 +164,9 @@ const hhmm=d=>String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).pa
 const toMin=t=>{if(!t)return null;const [h,m]=t.split(':').map(Number);return h*60+m};
 const fmtH=m=>(Math.round(m/6)/10).toFixed(1);
 const STATUS=['출석','지각','결석','휴무'];
-const SUBJ=['대지계획','건축설계','기타'];
+const SUBJ=[{v:'1교시 대지계획',p:'1교시',n:'대지계획'},{v:'2교시 건축설계1',p:'2교시',n:'건축설계1'},{v:'3교시 건축설계2',p:'3교시',n:'건축설계2'},{v:'기타',p:'',n:'기타'}];
+const LEGACY={'대지계획':'1교시 대지계획'};
+const subjList=str=>String(str||'').split(',').map(x=>x.trim()).filter(Boolean).map(x=>LEGACY[x]||x);
 const PENS={red:{name:'빨강',c:'#d6402b'},blue:{name:'파랑',c:'#2b5fd9'},green:{name:'초록',c:'#2f8f5b'},orange:{name:'주황',c:'#e0801f'},violet:{name:'보라',c:'#7a4fd6'},graphite:{name:'흑연',c:'#5a5f67'}};
 const PK=Object.keys(PENS);
 const LS={get(k){try{return localStorage.getItem(k)}catch(e){return null}},set(k,v){try{v==null?localStorage.removeItem(k):localStorage.setItem(k,v)}catch(e){}}};
@@ -302,7 +309,8 @@ function vToday(){
       <div style="flex:1;max-width:200px"><small class="muted">목표 ${S.target_hours}h 대비 ${Math.round(goalPct)}%</small><div class="hbar" style="margin-top:6px"><i style="width:${goalPct}%;background:${pen(me)}"></i></div></div></div>
     </div><div>
     <h3>학습내용</h3>
-    <div class="chips" role="radiogroup" aria-label="과목">${SUBJ.map(s=>`<button class="chip ${d.subject===s?'on':''}" role="radio" aria-checked="${d.subject===s}" data-act="subj" data-s="${s}">${s}</button>`).join('')}</div>
+    <div class="subj" role="group" aria-label="시험 과목 (여러 개 선택 가능)">${SUBJ.map(o=>{const on=subjList(d.subject).includes(o.v);return `<button class="sj ${on?'on':''}" aria-pressed="${on}" data-act="subj" data-s="${o.v}">${o.p?`<b class="num">${o.p}</b>`:''}<span>${o.n}</span></button>`}).join('')}</div>
+    <p class="muted" style="margin:6px 0 0;font-size:13px">하루에 여러 교시를 공부했다면 모두 고르세요.</p>
     <input id="task" value="${esc(d.task)}" placeholder="과제명 (예: 모의 3회 작도 + 피드백)" maxlength="100" style="width:100%;margin-top:8px">
     <h3>작도 사진</h3>
     <button class="btn ghost sm" data-act="pick" ${st.uploading?'disabled':''}>${st.uploading?`올리는 중… (${st.uploading})`:'+ 사진 추가'}</button> <span class="muted">자동으로 1600px로 줄여 저장</span>
@@ -327,7 +335,7 @@ function vTeam(){
   const all=[];ids.forEach(u=>(logs.get(u)||new Map()).forEach((r,d)=>{if(r.task||r.note||(r.photos||[]).length||r.check_in)all.push({u,d,r})}));
   all.sort((a,b)=>a.d<b.d?1:a.d>b.d?-1:String(b.r.updated||'').localeCompare(String(a.r.updated||'')));
   const feed=all.slice(0,40).map(({u,d,r})=>`<div class="card"><div class="head" style="margin:0"><span class="who"><span class="pen" style="background:${pen(u)}"></span>${esc(nameOf(u))}</span><span class="muted num">${esc(d)} (${wd(d)})</span></div>
-    <div class="chips" style="margin-top:8px">${r.status?`<span class="state">${esc(r.status)}</span>`:''}${r.check_in?`<span class="state num">${esc(r.check_in)}–${esc(r.check_out||'…')} · ${fmtH(minutes(r,d))}h</span>`:''}${r.subject?`<span class="state">${esc(r.subject)}</span>`:''}</div>
+    <div class="chips" style="margin-top:8px">${r.status?`<span class="state">${esc(r.status)}</span>`:''}${r.check_in?`<span class="state num">${esc(r.check_in)}–${esc(r.check_out||'…')} · ${fmtH(minutes(r,d))}h</span>`:''}${subjList(r.subject).map(x=>`<span class="state">${esc(x)}</span>`).join('')}</div>
     ${u===me?`<button class="linkbtn" style="margin-top:8px" data-act="editday" data-d="${esc(d)}">이 기록 고치기·삭제</button>`:''}
     ${r.task?`<p style="margin:10px 0 0;font-weight:600">${esc(r.task)}</p>`:''}${r.note?`<p style="margin:6px 0 0">${esc(r.note)}</p>`:''}
     ${(r.photos||[]).length?`<div class="photos">${r.photos.map(p=>`<figure>${photoSrc(p)?`<img loading="lazy" src="${esc(photoSrc(p))}" alt="${esc(nameOf(u))}의 작도 사진">`:''}</figure>`).join('')}</div>`:''}</div>`).join('');
@@ -348,6 +356,7 @@ function vReport(){
   const mrows=months.map(m=>`<tr class="${t.slice(0,7)===m?'cur':''}"><td class="n">${esc(m.replace('-','.'))}</td>${ids.map(u=>{const o=stats(u,m+'-01',m+'-31');return `<td class="n">${o.출석}/${o.지각}/${o.결석}/${o.휴무}</td><td class="n">${Math.round(o.rate*100)}%</td><td class="n">${fmtH(o.min)}h</td>`}).join('')}</tr>`).join('');
   return `<div class="card"><h2>개인별 누적 현황 <span class="tag">${esc(S.start_date)} ~ ${esc(end)}</span></h2><p class="muted" style="margin:4px 0 12px">목표: 출석률 ${Math.round(S.target_rate*100)}% 이상 · 출석일 평균 ${S.target_hours}시간 이상</p>
     <div class="scroll"><table>${head}${body}</table></div><p class="muted" style="margin:8px 0 0">출석률 = (출석+지각) ÷ (출석+지각+결석). 휴무는 제외합니다.</p></div>
+  <div class="card" style="margin-top:16px"><h2>과목별 학습 <span class="tag">교시별 학습일</span></h2><div class="scroll" style="margin-top:12px"><table><tr><th>과목</th>${ids.map(u=>`<th>${esc(nameOf(u))}</th>`).join('')}</tr>${SUBJ.map(o=>`<tr><td>${o.p?`<b class="num">${o.p}</b> `:''}${o.n}</td>${ids.map(u=>{let c=0;(logs.get(u)||new Map()).forEach((r,d)=>{if(d>=S.start_date&&d<=end&&subjList(r.subject).includes(o.v))c++});return `<td class="n">${c}일</td>`}).join('')}</tr>`).join('')}</table></div><p class="muted" style="margin:8px 0 0">하루에 여러 교시를 공부하면 각 교시에 하루씩 셉니다.</p></div>
   <div class="card" style="margin-top:16px"><h2>주간 결산 <span class="tag">공부시간 추이</span></h2><div class="scroll" style="margin-top:12px"><table><tr><th>주차</th><th>기간</th>${ids.map(u=>`<th>${esc(nameOf(u))}</th>`).join('')}</tr>${wrows}</table></div><p class="muted" style="margin:8px 0 0">이번 주는 붉은 바탕으로 표시됩니다.</p></div>
   <div class="card" style="margin-top:16px"><h2>월별 결산</h2><div class="scroll" style="margin-top:12px"><table><tr><th rowspan="2">월</th>${ids.map(u=>`<th colspan="3">${esc(nameOf(u))}</th>`).join('')}</tr><tr>${ids.map(()=>'<th>출석/지각/결석/휴무</th><th>출석률</th><th>공부</th>').join('')}</tr>${mrows}</table></div></div>`;
 }
@@ -411,7 +420,8 @@ $('#view').addEventListener('click',async e=>{
     const ph=(r&&r.photos)||[];if(ph.length)sb.storage.from(BUCKET).remove(ph);
     logs.get(me)?.delete(key);st.confirmDel=null;st.dirty=false;st.draftKey='';toast(`${key} 기록을 삭제했습니다.`);paint()}
   if(a==='status'){d.status=d.status===b.dataset.s?'':b.dataset.s;st.dirty=true;saveDraft(true);paint()}
-  if(a==='subj'){d.subject=d.subject===b.dataset.s?'':b.dataset.s;st.dirty=true;saveDraft(true);paint()}
+  if(a==='subj'){const v=b.dataset.s,l=subjList(d.subject);const nl=l.includes(v)?l.filter(x=>x!==v):[...l,v];
+    d.subject=SUBJ.map(o=>o.v).filter(x=>nl.includes(x)).concat(nl.filter(x=>!SUBJ.some(o=>o.v===x))).join(', ');st.dirty=true;saveDraft(true);paint()}
   if(a==='now'){const f=b.dataset.f;d[f]=hhmm(new Date());if(f==='check_in'&&!d.status)d.status='출석';st.dirty=true;saveDraft(true);paint();toast(f==='check_in'?'입실 기록했습니다.':'퇴실 기록했습니다. 수고하셨어요!')}
   if(a==='pick')$('#file').click();
   if(a==='rmphoto'){const p=b.dataset.id;d.photos=d.photos.filter(x=>x!==p);st.dirty=true;saveDraft(true);paint();sb.storage.from(BUCKET).remove([p])}
